@@ -18,7 +18,8 @@ type Credentials struct {
 }
 
 // Sign signs a request bound for AWS. It automatically chooses the best
-// authentication scheme based on the service the request is going to.
+// authentication scheme based on the service the request is going to. It
+// assumes region and service based on segments of request host domain.
 func Sign(request *http.Request, credentials ...Credentials) *http.Request {
 	service, _ := serviceAndRegion(request.URL.Host)
 	signVersion := awsSignVersion[service]
@@ -37,7 +38,9 @@ func Sign(request *http.Request, credentials ...Credentials) *http.Request {
 	return nil
 }
 
-// SignForRegion signs a request bound for AWS. It automatically chooses the best
+// SignForRegion signs a request bound for AWS, for an explicit
+// region/service. If either region or service are empty, it will attempt to
+// determine them from the domain. It automatically chooses the best
 // authentication scheme based on the service the request is going to.
 func SignForRegion(request *http.Request, region, service string, credentials ...Credentials) *http.Request {
 	if service == "" {
