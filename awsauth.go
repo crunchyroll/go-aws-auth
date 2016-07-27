@@ -41,7 +41,7 @@ func Sign(request *http.Request, credentials ...Credentials) *http.Request {
 // authentication scheme based on the service the request is going to.
 func SignForRegion(request *http.Request, region, service string, credentials ...Credentials) *http.Request {
 	if service == "" {
-		service, _ := serviceAndRegion(request.URL.Host)
+		service, _ = serviceAndRegion(request.URL.Host)
 	}
 	signVersion := awsSignVersion[service]
 
