@@ -64,7 +64,6 @@ func stringToSignV4(request *http.Request, hashedCanonReq string, meta *metadata
 	if meta.region == "" {
 		meta.region = region
 	}
-	meta.service, meta.region = serviceAndRegion(request.Host)
 	meta.date = tsDateV4(requestTs)
 	meta.credentialScope = concat("/", meta.date, meta.region, meta.service, "aws4_request")
 
