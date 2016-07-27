@@ -37,8 +37,35 @@ func Sign(request *http.Request, credentials ...Credentials) *http.Request {
 	return nil
 }
 
+// SignForRegion signs a request bound for AWS. It automatically chooses the best
+// authentication scheme based on the service the request is going to.
+func SignForRegion(request *http.Request, region, service string, credentials ...Credentials) *http.Request {
+	if service == "" {
+		service, _ := serviceAndRegion(request.URL.Host)
+	}
+	signVersion := awsSignVersion[service]
+
+	switch signVersion {
+	case 2:
+		return Sign2(request, credentials...)
+	case 3:
+		return Sign3(request, credentials...)
+	case 4:
+		return Sign4ForRegion(request, region, service, credentials...)
+	case -1:
+		return SignS3(request, credentials...)
+	}
+
+	return nil
+}
+
 // Sign4 signs a request with Signed Signature Version 4.
 func Sign4(request *http.Request, credentials ...Credentials) *http.Request {
+	return Sign4ForRegion(request, "", "", credentials...)
+}
+
+// Sign4ForRegion signs a request with Signed Signature Version 4, for an explicit region/service.
+func Sign4ForRegion(request *http.Request, region, service string, credentials ...Credentials) *http.Request {
 	keys := chooseKeys(credentials)
 
 	// Add the X-Amz-Security-Token header when using STS
@@ -48,6 +75,8 @@ func Sign4(request *http.Request, credentials ...Credentials) *http.Request {
 
 	prepareRequestV4(request)
 	meta := new(metadata)
+	meta.region = region
+	meta.service = service
 
 	// Task 1
 	hashedCanonReq := hashedCanonicalRequestV4(request, meta)
