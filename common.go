@@ -92,7 +92,6 @@ func newKeys() *Credentials {
 
 		// If we didn't find something in the environment, check the instance role metadata
 		if (credentials.AccessKeyID == "" || credentials.SecretAccessKey == "") && onEC2() {
-			log.Printf("Fetching IAM role creds")
 			credentials = getIAMRoleCredentials()
 		}
 	}
@@ -104,7 +103,6 @@ func newKeys() *Credentials {
 
 	// Otherwise try to update role based (or blank creds) if they've expired
 	if credentials.expired() {
-		log.Printf("Refreshing IAM role creds")
 		credentials = getIAMRoleCredentials()
 	}
 
