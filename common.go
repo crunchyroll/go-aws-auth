@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -64,39 +65,57 @@ func serviceAndRegion(host string) (service string, region string) {
 	return
 }
 
-// newKeys produces a set of credentials based on the environment
-func newKeys() (newCredentials Credentials) {
-	// First use credentials from environment variables
-	newCredentials.AccessKeyID = os.Getenv(envAccessKeyID)
-	if newCredentials.AccessKeyID == "" {
-		newCredentials.AccessKeyID = os.Getenv(envAccessKey)
+var credentials *Credentials
+
+// newKeys produces a set of credentials based on the environment or
+// instance role.  It will first attempt to return credentials from
+// the environment; if that doesn't exist and the host is running in
+// EC2 it will attempt to fetch instance role based credentials.  If
+// this fails it returns a blank set.
+func newKeys() *Credentials {
+	if credentials == nil {
+		// Initialize
+		credentials = &Credentials{}
+
+		// First use credentials from environment variables
+		credentials.AccessKeyID = os.Getenv(envAccessKeyID)
+		if credentials.AccessKeyID == "" {
+			credentials.AccessKeyID = os.Getenv(envAccessKey)
+		}
+
+		credentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
+		if credentials.SecretAccessKey == "" {
+			credentials.SecretAccessKey = os.Getenv(envSecretKey)
+		}
+
+		credentials.SecurityToken = os.Getenv(envSecurityToken)
+
+		// If we didn't find something in the environment, check the instance role metadata
+		if (credentials.AccessKeyID == "" || credentials.SecretAccessKey == "") && onEC2() {
+			log.Printf("Fetching IAM role creds")
+			credentials = getIAMRoleCredentials()
+		}
 	}
 
-	newCredentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
-	if newCredentials.SecretAccessKey == "" {
-		newCredentials.SecretAccessKey = os.Getenv(envSecretKey)
+	// Env credentials are invariant, so never update them
+	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+		return credentials
 	}
 
-	newCredentials.SecurityToken = os.Getenv(envSecurityToken)
-
-	// If there is no Access Key and you are on EC2, get the key from the role
-	if (newCredentials.AccessKeyID == "" || newCredentials.SecretAccessKey == "") && onEC2() {
-		newCredentials = *getIAMRoleCredentials()
+	// Otherwise try to update role based (or blank creds) if they've expired
+	if credentials.expired() {
+		log.Printf("Refreshing IAM role creds")
+		credentials = getIAMRoleCredentials()
 	}
 
-	// If the key is expiring, get a new key
-	if newCredentials.expired() && onEC2() {
-		newCredentials = *getIAMRoleCredentials()
-	}
-
-	return newCredentials
+	return credentials
 }
 
 // checkKeys gets credentials depending on if any were passed in as an argument
 // or it makes new ones based on the environment.
 func chooseKeys(cred []Credentials) Credentials {
 	if len(cred) == 0 {
-		return newKeys()
+		return *newKeys()
 	} else {
 		return cred[0]
 	}
