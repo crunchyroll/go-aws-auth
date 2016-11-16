@@ -65,6 +65,7 @@ func serviceAndRegion(host string) (service string, region string) {
 }
 
 var credentials *Credentials
+var renewCreds bool
 
 // newKeys produces a set of credentials based on the environment or
 // instance role.  It will first attempt to return credentials from
@@ -92,16 +93,12 @@ func newKeys() *Credentials {
 		// If we didn't find something in the environment, check the instance role metadata
 		if (credentials.AccessKeyID == "" || credentials.SecretAccessKey == "") && onEC2() {
 			credentials = getIAMRoleCredentials()
+			renewCreds = true
 		}
 	}
 
-	// Env credentials are invariant, so never update them
-	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
-		return credentials
-	}
-
 	// Otherwise try to update role based (or blank creds) if they've expired
-	if credentials.expired() {
+	if renewCreds && credentials.expired() {
 		credentials = getIAMRoleCredentials()
 	}
 
