@@ -78,7 +78,7 @@ func (cs *CredentialsStore) getCredentials() (bool, Credentials) {
 		return false, Credentials{}
 	}
 
-	if !cs.credentials.expired() {
+	if cs.credentials.expired() {
 		return false, Credentials{}
 	}
 
