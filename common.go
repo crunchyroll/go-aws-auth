@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -64,52 +65,86 @@ func serviceAndRegion(host string) (service string, region string) {
 	return
 }
 
-var credentials *Credentials
-var renewCreds bool
+type CredentialsStore struct {
+	sync.RWMutex
+	credentials *Credentials
+}
+
+func (cs *CredentialsStore) getCredentials() (bool, Credentials) {
+	cs.RLock()
+	defer cs.RUnlock()
+
+	if cs.credentials == nil {
+		return false, Credentials{}
+	}
+
+	if !cs.credentials.expired() {
+		return false, Credentials{}
+	}
+
+	return true, *cs.credentials
+}
+
+func (cs *CredentialsStore) getNewCredentials() Credentials {
+	cs.Lock()
+	defer cs.Unlock()
+
+	if cs.credentials == nil {
+		cs.credentials = getNewKeys()
+	}
+
+	if cs.credentials.expired() {
+		cs.credentials = getNewKeys()
+	}
+
+	return *cs.credentials
+}
+
+var gCredentialsStore CredentialsStore
 
 // newKeys produces a set of credentials based on the environment or
 // instance role.  It will first attempt to return credentials from
 // the environment; if that doesn't exist and the host is running in
 // EC2 it will attempt to fetch instance role based credentials.  If
 // this fails it returns a blank set.
-func newKeys() *Credentials {
-	if credentials == nil {
-		// Initialize
-		credentials = &Credentials{}
 
-		// First use credentials from environment variables
-		credentials.AccessKeyID = os.Getenv(envAccessKeyID)
-		if credentials.AccessKeyID == "" {
-			credentials.AccessKeyID = os.Getenv(envAccessKey)
-		}
-
-		credentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
-		if credentials.SecretAccessKey == "" {
-			credentials.SecretAccessKey = os.Getenv(envSecretKey)
-		}
-
-		credentials.SecurityToken = os.Getenv(envSecurityToken)
-
-		// If we didn't find something in the environment, check the instance role metadata
-		if (credentials.AccessKeyID == "" || credentials.SecretAccessKey == "") && onEC2() {
-			credentials = getIAMRoleCredentials()
-			renewCreds = true
-		}
+func newKeys() Credentials {
+	valid, ret := gCredentialsStore.getCredentials()
+	if !valid {
+		ret = gCredentialsStore.getNewCredentials()
 	}
 
-	// Otherwise try to update role based (or blank creds) if they've expired
-	if renewCreds && credentials.expired() {
-		credentials = getIAMRoleCredentials()
+	return ret
+}
+
+func getNewKeys() (newCredentials *Credentials) {
+	newCredentials = &Credentials{}
+	// First use credentials from environment variables
+	newCredentials.AccessKeyID = os.Getenv(envAccessKeyID)
+	if newCredentials.AccessKeyID == "" {
+		newCredentials.AccessKeyID = os.Getenv(envAccessKey)
 	}
 
-	return credentials
+	newCredentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
+	if newCredentials.SecretAccessKey == "" {
+		newCredentials.SecretAccessKey = os.Getenv(envSecretKey)
+	}
+
+	newCredentials.SecurityToken = os.Getenv(envSecurityToken)
+
+	// If there is no Access Key and you are on EC2, get the key from the role
+	if (newCredentials.AccessKeyID == "" || newCredentials.SecretAccessKey == "") && onEC2() {
+		newCredentials = getIAMRoleCredentials()
+	}
+
+	return
 }
 
 // checkKeys gets credentials depending on if any were passed in as an argument
 // or it makes new ones based on the environment.
 func chooseKeys(cred []Credentials) Credentials {
 	if len(cred) == 0 {
-		return *newKeys()
+		return newKeys()
 	} else {
 		return cred[0]
 	}
