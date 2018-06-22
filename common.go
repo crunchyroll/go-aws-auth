@@ -20,13 +20,6 @@ import (
 	"time"
 )
 
-type location struct {
-	ec2     bool
-	checked bool
-}
-
-var loc *location
-
 // serviceAndRegion parsers a hostname to find out which ones it is.
 // http://docs.aws.amazon.com/general/latest/gr/rande.html
 func serviceAndRegion(host string) (service string, region string) {
@@ -121,25 +114,37 @@ func chooseKeys(cred []Credentials) Credentials {
 	return cred[0]
 }
 
+type location struct {
+	ec2     bool
+	checked bool
+	sync.RWMutex
+}
+
+var loc location
+
 // onEC2 checks to see if the program is running on an EC2 instance.
 // It does this by looking for the EC2 metadata service.
 // This caches that information in a struct so that it doesn't waste time.
 func onEC2() bool {
-	if loc == nil {
-		loc = &location{}
+	loc.RLock()
+	if loc.checked {
+		ec2 := loc.ec2
+		loc.RUnlock()
+		return ec2
 	}
-	if !(loc.checked) {
-		c, err := net.DialTimeout("tcp", "169.254.169.254:80", time.Millisecond*100)
+	loc.RUnlock()
 
-		if err != nil {
-			loc.ec2 = false
-		} else {
-			c.Close()
-			loc.ec2 = true
-		}
-		loc.checked = true
+	c, err := net.DialTimeout("tcp", "169.254.169.254:80", time.Millisecond*100)
+	loc.Lock()
+	defer loc.Unlock()
+	loc.checked = true
+	if err != nil {
+		loc.ec2 = false
+		return loc.ec2
 	}
 
+	c.Close()
+	loc.ec2 = true
 	return loc.ec2
 }
 
