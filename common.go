@@ -16,15 +16,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
-
-type location struct {
-	ec2     bool
-	checked bool
-}
-
-var loc *location
 
 // serviceAndRegion parsers a hostname to find out which ones it is.
 // http://docs.aws.amazon.com/general/latest/gr/rande.html
@@ -64,76 +58,93 @@ func serviceAndRegion(host string) (service string, region string) {
 	return
 }
 
-var credentials *Credentials
-var renewCreds bool
-
-// newKeys produces a set of credentials based on the environment or
-// instance role.  It will first attempt to return credentials from
-// the environment; if that doesn't exist and the host is running in
-// EC2 it will attempt to fetch instance role based credentials.  If
-// this fails it returns a blank set.
-func newKeys() *Credentials {
-	if credentials == nil {
-		// Initialize
-		credentials = &Credentials{}
-
-		// First use credentials from environment variables
-		credentials.AccessKeyID = os.Getenv(envAccessKeyID)
-		if credentials.AccessKeyID == "" {
-			credentials.AccessKeyID = os.Getenv(envAccessKey)
-		}
-
-		credentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
-		if credentials.SecretAccessKey == "" {
-			credentials.SecretAccessKey = os.Getenv(envSecretKey)
-		}
-
-		credentials.SecurityToken = os.Getenv(envSecurityToken)
-
-		// If we didn't find something in the environment, check the instance role metadata
-		if (credentials.AccessKeyID == "" || credentials.SecretAccessKey == "") && onEC2() {
-			credentials = getIAMRoleCredentials()
-			renewCreds = true
-		}
-	}
-
-	// Otherwise try to update role based (or blank creds) if they've expired
-	if renewCreds && credentials.expired() {
-		credentials = getIAMRoleCredentials()
-	}
-
-	return credentials
+type CredentialsStore struct {
+	sync.RWMutex
+	credentials *Credentials
 }
+
+func (cs *CredentialsStore) Get() Credentials {
+	cs.RLock()
+	if cs.credentials != nil && !cs.credentials.expired() {
+		credentials := *cs.credentials
+		cs.RUnlock()
+		return credentials
+	}
+	cs.RUnlock()
+
+	cs.Lock()
+	defer cs.Unlock()
+
+	cs.retrieve()
+
+	return *cs.credentials
+}
+
+func (cs *CredentialsStore) retrieve() {
+	newCredentials := Credentials{}
+	// First use credentials from environment variables
+	newCredentials.AccessKeyID = os.Getenv(envAccessKeyID)
+	if newCredentials.AccessKeyID == "" {
+		newCredentials.AccessKeyID = os.Getenv(envAccessKey)
+	}
+
+	newCredentials.SecretAccessKey = os.Getenv(envSecretAccessKey)
+	if newCredentials.SecretAccessKey == "" {
+		newCredentials.SecretAccessKey = os.Getenv(envSecretKey)
+	}
+
+	newCredentials.SecurityToken = os.Getenv(envSecurityToken)
+
+	// If there is no Access Key and you are on EC2, get the key from the role
+	if (newCredentials.AccessKeyID == "" || newCredentials.SecretAccessKey == "") && onEC2() {
+		newCredentials = getIAMRoleCredentials()
+	}
+
+	cs.credentials = &newCredentials
+}
+
+var gCredentialsStore CredentialsStore
 
 // checkKeys gets credentials depending on if any were passed in as an argument
 // or it makes new ones based on the environment.
 func chooseKeys(cred []Credentials) Credentials {
 	if len(cred) == 0 {
-		return *newKeys()
-	} else {
-		return cred[0]
+		return gCredentialsStore.Get()
 	}
+	return cred[0]
 }
+
+type location struct {
+	ec2     bool
+	checked bool
+	sync.RWMutex
+}
+
+var loc location
 
 // onEC2 checks to see if the program is running on an EC2 instance.
 // It does this by looking for the EC2 metadata service.
 // This caches that information in a struct so that it doesn't waste time.
 func onEC2() bool {
-	if loc == nil {
-		loc = &location{}
+	loc.RLock()
+	if loc.checked {
+		ec2 := loc.ec2
+		loc.RUnlock()
+		return ec2
 	}
-	if !(loc.checked) {
-		c, err := net.DialTimeout("tcp", "169.254.169.254:80", time.Millisecond*100)
+	loc.RUnlock()
 
-		if err != nil {
-			loc.ec2 = false
-		} else {
-			c.Close()
-			loc.ec2 = true
-		}
-		loc.checked = true
+	c, err := net.DialTimeout("tcp", "169.254.169.254:80", time.Millisecond*100)
+	loc.Lock()
+	defer loc.Unlock()
+	loc.checked = true
+	if err != nil {
+		loc.ec2 = false
+		return loc.ec2
 	}
 
+	c.Close()
+	loc.ec2 = true
 	return loc.ec2
 }
 
@@ -165,12 +176,12 @@ func getIAMRoleList() []string {
 	return roles
 }
 
-func getIAMRoleCredentials() *Credentials {
+func getIAMRoleCredentials() Credentials {
 
 	roles := getIAMRoleList()
 
 	if len(roles) < 1 {
-		return &Credentials{}
+		return Credentials{}
 	}
 
 	// Use the first role in the list
@@ -188,14 +199,14 @@ func getIAMRoleCredentials() *Credentials {
 	roleRequest, err := http.NewRequest("GET", roleURL, nil)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 
 	client := &http.Client{}
 	roleResponse, err := client.Do(roleRequest)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 	defer roleResponse.Body.Close()
 
@@ -207,10 +218,10 @@ func getIAMRoleCredentials() *Credentials {
 	err = json.Unmarshal(roleBuffer.Bytes(), &credentials)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 
-	return &credentials
+	return credentials
 
 }
 

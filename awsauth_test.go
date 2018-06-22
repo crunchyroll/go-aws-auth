@@ -181,8 +181,7 @@ func TestSign(t *testing.T) {
 		}
 	})
 
-	var keys Credentials
-	keys = newKeys()
+	keys := gCredentialsStore.Get()
 	Convey("Requests to services using existing credentials Version 2 should be signed accordingly", t, func() {
 		reqs := []*http.Request{
 			newRequest("GET", "https://ec2.amazonaws.com", url.Values{}),
@@ -242,13 +241,7 @@ func TestExpiration(t *testing.T) {
 }
 
 func credentialsSet() bool {
-	var keys Credentials
-	keys = newKeys()
-	if keys.AccessKeyID == "" {
-		return false
-	} else {
-		return true
-	}
+	return gCredentialsStore.Get().AccessKeyID != ""
 }
 
 func newRequest(method string, url string, v url.Values) *http.Request {
