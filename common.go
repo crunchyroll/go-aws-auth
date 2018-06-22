@@ -70,55 +70,25 @@ type CredentialsStore struct {
 	credentials *Credentials
 }
 
-func (cs *CredentialsStore) getCredentials() (bool, Credentials) {
+func (cs *CredentialsStore) Get() Credentials {
 	cs.RLock()
-	defer cs.RUnlock()
-
-	if cs.credentials == nil {
-		return false, Credentials{}
+	if cs.credentials != nil && !cs.credentials.expired() {
+		credentials := *cs.credentials
+		cs.RUnlock()
+		return credentials
 	}
+	cs.RUnlock()
 
-	if cs.credentials.expired() {
-		return false, Credentials{}
-	}
-
-	return true, *cs.credentials
-}
-
-func (cs *CredentialsStore) getNewCredentials() Credentials {
 	cs.Lock()
 	defer cs.Unlock()
 
-	if cs.credentials == nil {
-		cs.credentials = getNewKeys()
-	}
-
-	if cs.credentials.expired() {
-		cs.credentials = getNewKeys()
-	}
+	cs.retrieve()
 
 	return *cs.credentials
 }
 
-var gCredentialsStore CredentialsStore
-
-// newKeys produces a set of credentials based on the environment or
-// instance role.  It will first attempt to return credentials from
-// the environment; if that doesn't exist and the host is running in
-// EC2 it will attempt to fetch instance role based credentials.  If
-// this fails it returns a blank set.
-
-func newKeys() Credentials {
-	valid, ret := gCredentialsStore.getCredentials()
-	if !valid {
-		ret = gCredentialsStore.getNewCredentials()
-	}
-
-	return ret
-}
-
-func getNewKeys() (newCredentials *Credentials) {
-	newCredentials = &Credentials{}
+func (cs *CredentialsStore) retrieve() {
+	newCredentials := Credentials{}
 	// First use credentials from environment variables
 	newCredentials.AccessKeyID = os.Getenv(envAccessKeyID)
 	if newCredentials.AccessKeyID == "" {
@@ -137,17 +107,18 @@ func getNewKeys() (newCredentials *Credentials) {
 		newCredentials = getIAMRoleCredentials()
 	}
 
-	return
+	cs.credentials = &newCredentials
 }
+
+var gCredentialsStore CredentialsStore
 
 // checkKeys gets credentials depending on if any were passed in as an argument
 // or it makes new ones based on the environment.
 func chooseKeys(cred []Credentials) Credentials {
 	if len(cred) == 0 {
-		return newKeys()
-	} else {
-		return cred[0]
+		return gCredentialsStore.Get()
 	}
+	return cred[0]
 }
 
 // onEC2 checks to see if the program is running on an EC2 instance.
@@ -200,12 +171,12 @@ func getIAMRoleList() []string {
 	return roles
 }
 
-func getIAMRoleCredentials() *Credentials {
+func getIAMRoleCredentials() Credentials {
 
 	roles := getIAMRoleList()
 
 	if len(roles) < 1 {
-		return &Credentials{}
+		return Credentials{}
 	}
 
 	// Use the first role in the list
@@ -223,14 +194,14 @@ func getIAMRoleCredentials() *Credentials {
 	roleRequest, err := http.NewRequest("GET", roleURL, nil)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 
 	client := &http.Client{}
 	roleResponse, err := client.Do(roleRequest)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 	defer roleResponse.Body.Close()
 
@@ -242,10 +213,10 @@ func getIAMRoleCredentials() *Credentials {
 	err = json.Unmarshal(roleBuffer.Bytes(), &credentials)
 
 	if err != nil {
-		return &Credentials{}
+		return Credentials{}
 	}
 
-	return &credentials
+	return credentials
 
 }
 
